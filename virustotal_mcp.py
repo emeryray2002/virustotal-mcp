@@ -149,7 +149,7 @@ async def _fetch_relationships(
 async def get_file_report(hash: str) -> Dict[str, Any]:
     """
     Name: get_file_report
-    Description: Get a comprehensive file analysis report using its hash (MD5/SHA-1/SHA-256). Includes detection results, file properties, and key relationships like behaviors, dropped files, network connections, embedded content, and related threat actors. This tool automatically fetches summary information for these key relationships. For detailed, paginated relationship data, use the 'get_file_relationship' tool.
+    Description: Get a comprehensive file analysis report using its hash (MD5/SHA-1/SHA-256). Returns a concise summary of key threat details including detection stats, threat classification, and important indicators.
     Parameters:
     hash (required): The MD5, SHA-1, or SHA-256 hash of the file to analyze. Example: '8ab2cf...', 'e4d909c290d0...', etc.
     """
@@ -161,22 +161,95 @@ async def get_file_report(hash: str) -> Dict[str, Any]:
         logger.error(f"Error fetching main file report for {hash}: {report['error']}")
         return {"error": f"Failed to get main file report: {report['error']}", "details": report.get("details")}
 
-    # Define key relationships to fetch automatically for files
+    # Extract key threat details from the report
+    data = report.get("data", {})
+    attributes = data.get("attributes", {})
+    
+    # Create a concise summary of key threat details
+    threat_summary = {
+        "file_info": {
+            "sha256": attributes.get("sha256"),
+            "sha1": attributes.get("sha1"),
+            "md5": attributes.get("md5"),
+            "size": attributes.get("size"),
+            "type": attributes.get("type_description"),
+            "first_seen": attributes.get("first_submission_date"),
+            "last_seen": attributes.get("last_submission_date"),
+            "meaningful_name": attributes.get("meaningful_name"),
+            "names": attributes.get("names", [])[:3]  # Limit to 3 most recent names
+        },
+        "detection_stats": attributes.get("last_analysis_stats", {}),
+        "reputation": attributes.get("reputation"),
+        "threat_severity": attributes.get("threat_severity", {}).get("threat_severity_level"),
+        "popular_threat_classification": {
+            "suggested_label": attributes.get("popular_threat_classification", {}).get("suggested_threat_label"),
+            "categories": [cat.get("value") for cat in attributes.get("popular_threat_classification", {}).get("popular_threat_category", [])],
+            "names": [name.get("value") for name in attributes.get("popular_threat_classification", {}).get("popular_threat_name", [])]
+        },
+        "sandbox_verdicts": {
+            name: verdict.get("category") 
+            for name, verdict in attributes.get("sandbox_verdicts", {}).items()
+        },
+        "tags": attributes.get("tags", []),
+        "top_detections": [
+            {
+                "engine": engine,
+                "result": result.get("result"),
+                "category": result.get("category")
+            }
+            for engine, result in attributes.get("last_analysis_results", {}).items()
+            if result.get("category") == "malicious"
+        ][:3],  # Limit to top 3 malicious detections
+        "technical_details": {
+            "pe_info": {
+                "imphash": attributes.get("pe_info", {}).get("imphash"),
+                "entry_point": attributes.get("pe_info", {}).get("entry_point"),
+                "sections": [
+                    {
+                        "name": section.get("name"),
+                        "entropy": section.get("entropy"),
+                        "md5": section.get("md5")
+                    }
+                    for section in attributes.get("pe_info", {}).get("sections", [])
+                ],
+                "imports": [
+                    {
+                        "library": imp.get("library_name"),
+                        "functions": imp.get("imported_functions", [])[:3]  # Limit to 3 functions per library
+                    }
+                    for imp in attributes.get("pe_info", {}).get("import_list", [])
+                ]
+            },
+            "packers": attributes.get("packers", {}),
+            "compiler": attributes.get("detectiteasy", {}).get("values", [])
+        },
+        "behavioral_info": {
+            "autostart_locations": attributes.get("autostart_locations", [])[:3],  # Limit to 3 locations
+            "available_tools": attributes.get("available_tools", [])
+        },
+        "threat_actor_info": {
+            "belongs_to_threat_actor": attributes.get("threat_severity", {}).get("threat_severity_data", {}).get("belongs_to_threat_actor", False),
+            "belongs_to_bad_collection": attributes.get("threat_severity", {}).get("threat_severity_data", {}).get("belongs_to_bad_collection", False)
+        }
+    }
+
+    # Fetch key relationships if they exist
     key_relationships = [
-        "behaviours", "dropped_files", "contacted_domains", "contacted_ips",
-        "contacted_urls", "embedded_domains", "embedded_ips", "embedded_urls",
-        "related_threat_actors", "execution_parents", "compressed_parents"
+        "contacted_domains", "contacted_ips", "contacted_urls",
+        "dropped_files", "embedded_domains", "embedded_ips", "embedded_urls"
     ]
-
-    logger.info(f"Fetching related data for file {hash}: {key_relationships}")
+    
     relationship_data = await _fetch_relationships("files", hash, key_relationships)
+    
+    # Add relationship data if available
+    if relationship_data:
+        threat_summary["relationships"] = {
+            rel: data.get("count", 0)
+            for rel, data in relationship_data.items()
+        }
 
-    # Combine the main report with relationship data
-    combined_report = {"main_report": report}
-    combined_report.update(relationship_data)
-
-    logger.info(f"Successfully generated comprehensive file report for hash: {hash}")
-    return combined_report
+    logger.info(f"Successfully generated concise threat summary for hash: {hash}")
+    return threat_summary
 
 @mcp.tool()
 async def get_url_report(url: str) -> Dict[str, Any]:
@@ -295,12 +368,79 @@ async def get_file_behavior_summary(hash: str) -> Dict[str, Any]:
     hash (required): The MD5, SHA-1, or SHA-256 hash of the file.
     """
     logger.info(f"Fetching file behavior summary for hash: {hash}")
-    endpoint = f"files/{hash}/behaviours_summary" # Note the plural 'behaviours'
+    endpoint = f"files/{hash}/behaviour_summary" # Note the singular 'behaviour'
     result = await _make_vt_request("GET", endpoint)
 
     if "error" in result:
         logger.error(f"Error fetching behavior summary for {hash}: {result['error']}")
+        return result
 
+    # If successful, process the data to create a more structured summary
+    if "data" in result:
+        # Extract key elements from the behavior data
+        data = result["data"]
+        
+        # Create a more structured summary focused on threat hunting
+        behavior_summary = {
+            "network_indicators": {
+                "dns_lookups": data.get("dns_lookups", []),
+                "ja3_digests": data.get("ja3_digests", []),
+                "http_conversations": data.get("http_conversations", [])[:5],  # Limit to 5 conversations
+                "contacted_ips": list(set([
+                    ip 
+                    for lookup in data.get("dns_lookups", []) 
+                    if "resolved_ips" in lookup 
+                    for ip in lookup.get("resolved_ips", [])
+                ])),
+                "domains_contacted": list(set([
+                    lookup.get("hostname") 
+                    for lookup in data.get("dns_lookups", [])
+                    if "hostname" in lookup
+                ]))
+            },
+            "file_operations": {
+                "files_dropped": data.get("files_dropped", [])[:10],  # Limit to 10 files
+                "files_written": data.get("files_written", [])[:10],  # Limit to 10 files
+                "files_deleted": data.get("files_deleted", [])[:10]   # Limit to 10 files
+            },
+            "process_activity": {
+                "processes_created": data.get("processes_created", [])[:10],  # Limit to 10 processes
+                "processes_tree": data.get("processes_tree", []),
+                "processes_terminated": data.get("processes_terminated", [])[:10],  # Limit to 10 processes
+                "process_injections": data.get("process_injections", [])
+            },
+            "registry_activity": {
+                "registry_keys_set": data.get("registry_keys_set", [])[:10],  # Limit to 10 registry keys
+                "registry_keys_deleted": data.get("registry_keys_deleted", [])
+            },
+            "memory_indicators": {
+                "memory_pattern_domains": data.get("memory_pattern_domains", []),
+                "memory_pattern_urls": data.get("memory_pattern_urls", []),
+                "memory_pattern_ips": data.get("memory_pattern_ips", []),
+                "memory_strings_of_interest": data.get("memory_strings_of_interest", [])
+            },
+            "attack_techniques": {
+                "mitre_attack_techniques": [
+                    {
+                        "id": technique.get("id"),
+                        "name": technique.get("signature_description"),
+                        "severity": technique.get("severity")
+                    }
+                    for technique in data.get("mitre_attack_techniques", [])
+                ],
+                "mbc": data.get("mbc", [])  # Malware Behavior Catalog
+            },
+            "indicators_of_compromise": {
+                "tags": data.get("tags", []),
+                "verdicts": data.get("verdicts", [])
+            }
+        }
+        
+        return {
+            "summary": behavior_summary,
+            "raw_data": result  # Include the full raw data for reference if needed
+        }
+    
     return result
 
 @mcp.tool()
