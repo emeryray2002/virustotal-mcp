@@ -1,11 +1,17 @@
 # VirusTotal MCP Server
+[![smithery badge](https://smithery.ai/badge/@emeryray2002/virustotal-mcp)](https://smithery.ai/server/@emeryray2002/virustotal-mcp)
 
 A Model Context Protocol (MCP) server for querying the [VirusTotal API](https://www.virustotal.com/). This server provides comprehensive security analysis tools with automatic relationship data fetching. It integrates seamlessly with MCP-compatible applications like [Claude Desktop](https://claude.ai).
 
 ## Quick Start (TBD)
 
 ### Installing via Smithery
-TBD
+
+To install virustotal-mcp for Claude Desktop automatically via [Smithery](https://smithery.ai/server/@emeryray2002/virustotal-mcp):
+
+```bash
+npx -y @smithery/cli install @emeryray2002/virustotal-mcp --client claude
+```
 
 ### Installing Manually
 TBD
